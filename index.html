@@ -119,6 +119,23 @@
     }
     .aqhi-meta strong { display: block; font-size: 1rem; }
     .aqhi-meta span { color: var(--muted); font-size: 0.78rem; }
+    .gas-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin: 0 0 6px;
+    }
+    .gas-card {
+      background: #0b1220;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+    }
+    .gas-card .k { color: var(--muted); font-size: 0.75rem; }
+    .gas-card .v { margin-top: 2px; font-size: 1.35rem; font-weight: 800; line-height: 1.2; }
+    .gas-card .v.na { color: var(--muted); font-size: 1.05rem; font-weight: 700; }
+    .gas-card .u { margin-left: 4px; color: var(--muted); font-size: 0.72rem; font-weight: 600; }
+    .gas-note { margin: 0 0 14px; color: var(--muted); font-size: 0.75rem; }
     .section-title { font-size: 0.85rem; font-weight: 700; margin: 16px 0 8px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
     table.poll { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
     table.poll th, table.poll td { padding: 5px 4px; border-bottom: 1px solid var(--border); text-align: right; }
@@ -156,7 +173,7 @@
       </header>
       <div id="status">載入地圖與數據中…</div>
       <div id="detail">
-        <p class="placeholder">喺地圖上點選監測站，查看最新空氣質素健康指數（AQHI）同過去 24 小時數據。</p>
+        <p class="placeholder">喺地圖上點選監測站，查看最新空氣質素健康指數（AQHI）、該站目前二氧化硫（SO₂）同二氧化氮（NO₂），以及過去 24 小時數據。</p>
       </div>
     </aside>
   </div>
@@ -217,6 +234,7 @@
     let aqhi24ByStation = new Map();
     let pc24ByStation = new Map();
     let selectedEn = null;
+    let stationPopup = null;
 
     function setStatus(msg, isError = false) {
       statusEl.textContent = msg;
@@ -534,10 +552,74 @@
       try {
         const d = new Date(dt);
         if (Number.isNaN(d.getTime())) return dt;
-        return d.toLocaleString('zh-HK', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        return d.toLocaleString('zh-HK', {
+          month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
+          timeZone: 'Asia/Hong_Kong',
+        });
       } catch {
         return dt;
       }
+    }
+
+    /** EPD 24pc uses "-" when that hour has no reading. A leading dot (".4") is still a number. */
+    function fmtConc(raw) {
+      if (raw == null) return null;
+      let s = String(raw).trim();
+      if (!s || s === '-' || s === '—' || s === '*' || /^n\.?\/?a\.?$/i.test(s)) return null;
+      if (!Number.isFinite(Number(s))) return null;
+      if (s.startsWith('.')) s = `0${s}`;
+      else if (s.startsWith('-.')) s = `-0${s.slice(1)}`;
+      return s;
+    }
+
+    /** Latest hour from the 24-hour pollutant feed (same proxy as the history table). */
+    function currentGases(en) {
+      const pcs = pc24ByStation.get(en) || [];
+      const latest = pcs.length ? pcs[pcs.length - 1] : null;
+      return {
+        dt: latest?.dt || null,
+        so2: fmtConc(latest?.SO2),
+        no2: fmtConc(latest?.NO2),
+      };
+    }
+
+    function gasMeasure(value) {
+      return value == null ? 'N/A' : `${value} µg/m³`;
+    }
+
+    function gasCard(label, value) {
+      if (value == null) {
+        return `<div class="gas-card"><div class="k">${label}</div><div class="v na">N/A</div></div>`;
+      }
+      return `<div class="gas-card"><div class="k">${label}</div><div class="v">${value} <span class="u">µg/m³</span></div></div>`;
+    }
+
+    function stationPopupHtml(tc, en, aqhi) {
+      const g = currentGases(en);
+      const aqhiText = (aqhi == null || aqhi === '') ? '—' : String(aqhi);
+      return `<strong>${tc}</strong><br/>AQHI ${aqhiText}<br/>SO₂ ${gasMeasure(g.so2)}<br/>NO₂ ${gasMeasure(g.no2)}`;
+    }
+
+    function showStationPopup(map, lngLat, tc, en, aqhi) {
+      // New instance each tap. The previous popup's map-click handler would
+      // otherwise close this one when the user picks another station.
+      if (stationPopup) stationPopup.remove();
+      stationPopup = new maplibregl.Popup({ offset: 12, maxWidth: '280px' })
+        .setLngLat(lngLat)
+        .setHTML(stationPopupHtml(tc, en, aqhi))
+        .addTo(map);
+    }
+
+    function refreshStationPopup() {
+      if (!stationPopup || !selectedEn) return;
+      let open = false;
+      try { open = stationPopup.isOpen(); } catch (_) { open = false; }
+      if (!open) return;
+      const meta = STATIONS.find((s) => s.en === selectedEn);
+      const cur = currentByStation.get(selectedEn);
+      const series = aqhi24ByStation.get(selectedEn) || [];
+      const aqhi = cur?.aqhi ?? series.at(-1)?.aqhi ?? '';
+      stationPopup.setHTML(stationPopupHtml(meta?.tc || selectedEn, selectedEn, aqhi));
     }
 
     function renderDetail(en) {
@@ -547,6 +629,7 @@
       const series = aqhi24ByStation.get(en) || [];
       const pcs = pc24ByStation.get(en) || [];
       const latestPc = pcs.length ? pcs[pcs.length - 1] : null;
+      const gases = currentGases(en);
       const aqhi = cur?.aqhi ?? series.at(-1)?.aqhi ?? '—';
       const risk = aqhiRiskTc(aqhi, cur?.health_risk);
       const pub = cur?.publish_date
@@ -563,6 +646,13 @@
             <span>發布／最新：${pub}</span>
           </div>
         </div>
+        <div class="gas-row" aria-label="目前二氧化硫及二氧化氮">
+          ${gasCard('SO₂ 二氧化硫', gases.so2)}
+          ${gasCard('NO₂ 二氧化氮', gases.no2)}
+        </div>
+        <p class="gas-note">${gases.dt
+          ? `最近一小時濃度（${fmtTime(gases.dt)}）· 單位 µg/m³`
+          : '未有該站二氧化硫／二氧化氮讀數'}</p>
         <div class="section-title">過去 24 小時 AQHI</div>
         <canvas class="chart" id="aqhiChart"></canvas>
         <div class="section-title">最近一小時污染物濃度</div>
@@ -579,7 +669,7 @@
               <tr><td>PM₂.₅</td><td>${latestPc['PM2.5']}</td></tr>
             </tbody>
           </table>
-          <p class="placeholder" style="margin-top:8px;font-size:0.75rem">單位見環保署 data dictionary；「-」代表無讀數。</p>
+          <p class="placeholder" style="margin-top:8px;font-size:0.75rem">單位：µg/m³（環保署過去 24 小時污染物濃度）。「-」代表該小時無讀數。</p>
         ` : `<p class="placeholder">未有污染物數據。</p>`}
         <div class="section-title">過去 24 小時污染物（節錄）</div>
         ${pcs.length ? `
@@ -917,15 +1007,16 @@
           const f = e.features?.[0];
           if (!f) return;
           renderDetail(f.properties.en);
-          new maplibregl.Popup({ offset: 12 })
-            .setLngLat(f.geometry.coordinates)
-            .setHTML(`<strong>${f.properties.tc}</strong><br/>AQHI ${f.properties.aqhi || '—'}`)
-            .addTo(map);
+          showStationPopup(map, f.geometry.coordinates, f.properties.tc, f.properties.en, f.properties.aqhi);
         });
 
         try {
           await loadAirData();
           map.getSource('stations').setData(stationFeatures());
+          if (selectedEn) {
+            renderDetail(selectedEn);
+            refreshStationPopup();
+          }
         } catch (err) {
           console.error(err);
           setStatus(`空氣數據載入失敗（地圖仍可用）：${err.message || err}`, true);
@@ -936,7 +1027,10 @@
           try {
             await loadAirData();
             map.getSource('stations').setData(stationFeatures());
-            if (selectedEn) renderDetail(selectedEn);
+            if (selectedEn) {
+              renderDetail(selectedEn);
+              refreshStationPopup();
+            }
           } catch (err) {
             console.warn(err);
           }
