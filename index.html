@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-HK">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1220" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="HK Air" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
+  <title>HK-Air Quality</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.css" />
+  <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #121a2b;
+      --text: #e8eefc;
+      --muted: #9aacc8;
+      --accent: #3dd6c6;
+      --border: #243049;
+      --danger: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; font-family: "Segoe UI", "PingFang HK", "Noto Sans HK", "Microsoft JhengHei", sans-serif; background: var(--bg); color: var(--text); }
+    #app { position: relative; width: 100%; height: 100%; }
+    #map { position: absolute; inset: 0; width: 100%; height: 100%; background: #dce6f0; }
+    #sidebar {
+      position: absolute; top: 12px; right: 12px;
+      width: min(380px, calc(100% - 24px));
+      height: min(720px, calc(100% - 24px));
+      max-height: calc(100% - 24px);
+      background: rgba(18, 26, 43, 0.92);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      display: flex; flex-direction: column; min-height: 0;
+      z-index: 2;
+      box-shadow: 0 8px 28px rgba(0,0,0,.35);
+      pointer-events: auto;
+      touch-action: none;
+    }
+    #sidebar .drag-handle {
+      cursor: grab;
+      user-select: none;
+      padding: 10px 16px 8px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 8px;
+      color: var(--muted); font-size: 0.75rem;
+      flex-shrink: 0;
+    }
+    #sidebar .drag-handle:active { cursor: grabbing; }
+    #sidebar .drag-handle .grip {
+      width: 28px; height: 4px; border-radius: 2px;
+      background: #3a4a66; margin-right: 4px;
+    }
+    #map-lock-hint {
+      position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%);
+      z-index: 3;
+      background: rgba(11,18,32,.88);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      box-shadow: 0 6px 20px rgba(0,0,0,.35);
+      display: none;
+    }
+    #map-lock-hint.show { display: block; }
+    #tilt-toggle {
+      position: absolute;
+      left: 10px;
+      top: 118px;
+      z-index: 3;
+      width: 29px;
+      min-height: 29px;
+      padding: 4px 2px;
+      border: none;
+      border-radius: 4px;
+      background: #fff;
+      color: #333;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1.1;
+      cursor: pointer;
+      box-shadow: 0 0 0 2px rgba(0,0,0,.1);
+      writing-mode: horizontal-tb;
+    }
+    #tilt-toggle:hover { background: #f0f0f0; }
+    header.app-header {
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    header.app-header h1 { margin: 0 0 4px; font-size: 1.15rem; font-weight: 700; }
+    header.app-header p { margin: 0; color: var(--muted); font-size: 0.82rem; line-height: 1.4; }
+    #status {
+      padding: 8px 16px;
+      font-size: 0.78rem;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      min-height: 2.2em;
+    }
+    #status.error { color: var(--danger); }
+    #detail { padding: 12px 16px 20px; overflow: auto; flex: 1; }
+    .placeholder { color: var(--muted); font-size: 0.92rem; line-height: 1.5; }
+    .station-title { font-size: 1.2rem; font-weight: 700; margin: 0 0 2px; }
+    .station-sub { color: var(--muted); font-size: 0.82rem; margin-bottom: 12px; }
+    .aqhi-card {
+      display: flex; align-items: center; gap: 14px;
+      background: #0b1220; border: 1px solid var(--border);
+      border-radius: 12px; padding: 12px 14px; margin-bottom: 14px;
+    }
+    .aqhi-num {
+      width: 64px; height: 64px; border-radius: 14px;
+      display: grid; place-items: center;
+      font-size: 1.6rem; font-weight: 800; color: #0b1220;
+    }
+    .aqhi-meta strong { display: block; font-size: 1rem; }
+    .aqhi-meta span { color: var(--muted); font-size: 0.78rem; }
+    .section-title { font-size: 0.85rem; font-weight: 700; margin: 16px 0 8px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
+    table.poll { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    table.poll th, table.poll td { padding: 5px 4px; border-bottom: 1px solid var(--border); text-align: right; }
+    table.poll th:first-child, table.poll td:first-child { text-align: left; }
+    table.poll th { color: var(--muted); font-weight: 600; }
+    .chart {
+      width: 100%; height: 140px; background: #0b1220;
+      border: 1px solid var(--border); border-radius: 10px; margin-top: 8px;
+    }
+    .legend {
+      display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; font-size: 0.72rem; color: var(--muted);
+    }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+    .maplibregl-popup-content { color: #111; font-family: inherit; }
+    @media (max-width: 860px) {
+      #sidebar {
+        width: min(360px, calc(100% - 16px));
+        height: 42vh;
+        max-height: 42vh;
+      }
+      #tilt-toggle { top: 118px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="map" aria-label="香港空氣質素監測站地圖"></div>
+    <button type="button" id="tilt-toggle" title="切換 2D / 2.5D" aria-label="切換 2D / 2.5D">2.5D</button>
+    <div id="map-lock-hint" class="show">撳一下地圖解鎖移動／縮放</div>
+    <aside id="sidebar">
+      <div class="drag-handle" id="sidebar-drag" title="拖曳移動面板"><span class="grip"></span>拖曳移動資料面板</div>
+      <header class="app-header">
+        <h1>HK-Air Quality</h1>
+        <p>環保署監測站 · 實時 AQHI · 過去 24 小時指數與污染物<br />底圖：地政總署向量地圖<br /><span style="opacity:.85">請用 Chrome／Edge 開啟本檔；聊天室預覽多數唔會跑地圖。</span></p>
+      </header>
+      <div id="status">載入地圖與數據中…</div>
+      <div id="detail">
+        <p class="placeholder">喺地圖上點選監測站，查看最新空氣質素健康指數（AQHI）同過去 24 小時數據。</p>
+      </div>
+    </aside>
+  </div>
+
+  <script type="module">
+    const BASEMAP = 'https://mapapi.geodata.gov.hk/gs/api/v1.0.0/vt/basemap/WGS84';
+    const LABEL = 'https://mapapi.geodata.gov.hk/gs/api/v1.0.0/vt/label/hk/tc/WGS84';
+    const AQHI_NOW = 'https://dashboard.data.gov.hk/api/aqhi-individual?format=json';
+    const AQHI_24_LIVE = 'https://www.aqhi.gov.hk/epd/ddata/html/out/24aqhi_ChT.xml';
+    const PC_24_LIVE = 'https://www.aqhi.gov.hk/epd/ddata/html/out/24pc_ChT.xml';
+    const AQHI_24_EN = 'https://www.aqhi.gov.hk/epd/ddata/html/out/24aqhi_Eng.xml';
+    const PC_24_EN = 'https://www.aqhi.gov.hk/epd/ddata/html/out/24pc_Eng.xml';
+    const ARCHIVE_LIST = 'https://api.data.gov.hk/v1/historical-archive/list-file-versions';
+    const ARCHIVE_GET = 'https://api.data.gov.hk/v1/historical-archive/get-file';
+    // Same-origin proxy (server.py / hosted): /api/epd?f=24aqhi|24pc
+    const PROXY_EPD = (location.protocol.startsWith('http') && !/aqhi\.gov\.hk$/i.test(location.hostname)) ? `${location.origin}/api/epd` : null;
+
+    /** 站名（英）→ 座標；名稱對齊 dashboard / AQHI XML */
+    const STATIONS = [
+      { en: 'Central/Western', tc: '中西區', lat: 22.28497, lng: 114.14446, type: 'general' },
+      { en: 'Southern', tc: '南區', lat: 22.24746, lng: 114.16014, type: 'general' },
+      { en: 'Eastern', tc: '東區', lat: 22.28288, lng: 114.21937, type: 'general' },
+      { en: 'Kwun Tong', tc: '觀塘', lat: 22.30963, lng: 114.23117, type: 'general' },
+      { en: 'Sham Shui Po', tc: '深水埗', lat: 22.33022, lng: 114.15908, type: 'general' },
+      { en: 'Kwai Chung', tc: '葵涌', lat: 22.35775, lng: 114.12972, type: 'general' },
+      { en: 'Tsuen Wan', tc: '荃灣', lat: 22.37100, lng: 114.11453, type: 'general' },
+      { en: 'Tseung Kwan O', tc: '將軍澳', lat: 22.31764, lng: 114.25956, type: 'general' },
+      { en: 'Yuen Long', tc: '元朗', lat: 22.44453, lng: 114.02219, type: 'general' },
+      { en: 'Tuen Mun', tc: '屯門', lat: 22.39114, lng: 113.97673, type: 'general' },
+      { en: 'Tung Chung', tc: '東涌', lat: 22.28888, lng: 113.94365, type: 'general' },
+      { en: 'Tai Po', tc: '大埔', lat: 22.45085, lng: 114.16435, type: 'general' },
+      { en: 'Sha Tin', tc: '沙田', lat: 22.37628, lng: 114.18497, type: 'general' },
+      { en: 'North', tc: '北區', lat: 22.49670, lng: 114.12824, type: 'general' },
+      { en: 'Tap Mun', tc: '塔門', lat: 22.47132, lng: 114.36069, type: 'general' },
+      { en: 'Causeway Bay', tc: '銅鑼灣', lat: 22.27996, lng: 114.18500, type: 'roadside' },
+      { en: 'Central', tc: '中環', lat: 22.28181, lng: 114.15813, type: 'roadside' },
+      { en: 'Mong Kok', tc: '旺角', lat: 22.32261, lng: 114.16827, type: 'roadside' },
+    ];
+
+    const AQHI_COLORS = {
+      1: '#00e400', 2: '#00e400', 3: '#00e400',
+      4: '#ffff00', 5: '#ffff00', 6: '#ffff00',
+      7: '#ff7e00',
+      8: '#ff0000', 9: '#ff0000', 10: '#ff0000',
+      '10+': '#8f3f97',
+    };
+    const AQHI_LABEL = {
+      1: '低', 2: '低', 3: '低',
+      4: '中', 5: '中', 6: '中',
+      7: '高',
+      8: '甚高', 9: '甚高', 10: '甚高',
+      '10+': '嚴重',
+    };
+
+    const statusEl = document.getElementById('status');
+    const detailEl = document.getElementById('detail');
+    let currentByStation = new Map();
+    let aqhi24ByStation = new Map();
+    let pc24ByStation = new Map();
+    let selectedEn = null;
+
+    function setStatus(msg, isError = false) {
+      statusEl.textContent = msg;
+      statusEl.classList.toggle('error', isError);
+    }
+
+    function aqhiKey(v) {
+      if (v == null || v === '') return null;
+      const s = String(v).trim();
+      if (s === '10+' || s === '10＋') return '10+';
+      const n = Number(s);
+      return Number.isFinite(n) ? n : s;
+    }
+
+    function aqhiColor(v) {
+      const k = aqhiKey(v);
+      return AQHI_COLORS[k] || '#8899aa';
+    }
+
+    function aqhiRiskTc(v, apiRisk) {
+      if (apiRisk) {
+        const map = { Low: '低', Moderate: '中', High: '高', 'Very High': '甚高', Serious: '嚴重' };
+        return map[apiRisk] || apiRisk;
+      }
+      const k = aqhiKey(v);
+      return AQHI_LABEL[k] || '—';
+    }
+
+    async function buildHkStyle() {
+      const [basemapStyle, labelStyle] = await Promise.all([
+        fetch(`${BASEMAP}/resources/styles/root.json`).then((r) => r.json()),
+        fetch(`${LABEL}/resources/styles/root.json`).then((r) => r.json()),
+      ]);
+
+      const style = {
+        version: 8,
+        name: 'HK LandsD basemap + TC labels',
+        sprite: basemapStyle.sprite,
+        glyphs: `${LABEL}/resources/fonts/{fontstack}/{range}.pbf`,
+        sources: {
+          basemap: {
+            type: 'vector',
+            tiles: [`${BASEMAP}/tile/{z}/{y}/{x}.pbf`],
+            bounds: basemapStyle.sources?.esri?.bounds,
+            minzoom: basemapStyle.sources?.esri?.minzoom ?? 0,
+            // 地政總署實際 tile 只到 ~15；標 19 會喺 16+ 攞到 204 空白而唔 overscale → 變灰／冇路名
+            maxzoom: 15,
+            scheme: 'xyz',
+            attribution: '',
+          },
+          label: {
+            type: 'vector',
+            tiles: [`${LABEL}/tile/{z}/{y}/{x}.pbf`],
+            bounds: labelStyle.sources?.esri?.bounds,
+            minzoom: labelStyle.sources?.esri?.minzoom ?? 0,
+            maxzoom: 15,
+            scheme: 'xyz',
+          },
+          openfreemap: {
+            type: 'vector',
+            url: 'https://tiles.openfreemap.org/planet',
+            attribution: '© <a href="https://openfreemap.org/" target="_blank">OpenFreeMap</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>',
+          },
+        },
+        layers: [
+          {
+            id: 'hk-land-background',
+            type: 'background',
+            paint: { 'background-color': '#dce6f0' },
+          },
+        ],
+      };
+
+      for (const layer of basemapStyle.layers || []) {
+        const copy = structuredClone(layer);
+        copy.source = 'basemap';
+        style.layers.push(copy);
+      }
+      for (const layer of labelStyle.layers || []) {
+        const copy = structuredClone(layer);
+        copy.source = 'label';
+        copy.id = `label/${copy.id}`;
+        style.layers.push(copy);
+      }
+
+      // 3D 建築物：OpenFreeMap；插在第一個 label 圖層之下
+      const buildingLayer = {
+        id: 'openfreemap-buildings-3d',
+        type: 'fill-extrusion',
+        source: 'openfreemap',
+        'source-layer': 'building',
+        minzoom: 14,
+        filter: [
+          'all',
+          ['!=', ['get', 'hide_3d'], true],
+          ['!=', ['to-string', ['get', 'hide_3d']], 'true'],
+        ],
+        paint: {
+          'fill-extrusion-color': [
+            'interpolate', ['linear'],
+            ['coalesce', ['to-number', ['get', 'render_height']], 0],
+            0, '#f4f1ea',
+            120, '#e2e7ee',
+            300, '#cfd8e6',
+          ],
+          'fill-extrusion-height': ['coalesce', ['to-number', ['get', 'render_height']], 0],
+          'fill-extrusion-base': ['coalesce', ['to-number', ['get', 'render_min_height']], 0],
+          'fill-extrusion-opacity': [
+            'interpolate', ['linear'], ['zoom'],
+            14, 0,
+            14.5, 0.92,
+          ],
+        },
+        layout: { visibility: 'none' },
+      };
+      const firstLabelIdx = style.layers.findIndex((l) => String(l.id).startsWith('label/'));
+      if (firstLabelIdx >= 0) style.layers.splice(firstLabelIdx, 0, buildingLayer);
+      else style.layers.push(buildingLayer);
+      return style;
+    }
+
+    function ymd(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}${m}${day}`;
+    }
+
+    async function fetchArchiveXml(sourceUrl) {
+      const end = new Date();
+      end.setDate(end.getDate() - 1); // API: end 不可遲過昨天
+      const start = new Date(end);
+      start.setDate(start.getDate() - 2);
+      const listUrl = `${ARCHIVE_LIST}?url=${encodeURIComponent(sourceUrl)}&start=${ymd(start)}&end=${ymd(end)}`;
+      const listRes = await fetch(listUrl);
+      if (!listRes.ok) throw new Error(`歷史存檔清單 HTTP ${listRes.status}`);
+      const list = await listRes.json();
+      const stamps = list.timestamps || [];
+      if (!stamps.length) throw new Error('歷史存檔冇可用版本');
+      const time = stamps[stamps.length - 1];
+      // get-file 常回 302；瀏覽器會跟去 S3 直接攞 XML，唔好當 JSON parse
+      const fileRes = await fetch(`${ARCHIVE_GET}?url=${encodeURIComponent(sourceUrl)}&time=${encodeURIComponent(time)}`);
+      if (!fileRes.ok) throw new Error(`歷史存檔檔案 HTTP ${fileRes.status}`);
+      const body = await fileRes.text();
+      const trimmed = body.trimStart();
+      let xmlText;
+      if (trimmed.startsWith('{')) {
+        const meta = JSON.parse(trimmed);
+        if (!meta.location) throw new Error('歷史存檔缺少 location');
+        xmlText = await fetch(meta.location).then((r) => {
+          if (!r.ok) throw new Error(`歷史存檔 S3 HTTP ${r.status}`);
+          return r.text();
+        });
+      } else if (trimmed.startsWith('<')) {
+        xmlText = body;
+      } else {
+        throw new Error('歷史存檔回應格式唔正確');
+      }
+      return { xmlText, time, via: 'archive' };
+    }
+
+    async function fetchXmlPreferLive(liveUrl, enUrl) {
+      const canLive = /^https?:\/\/([^/]*\.)?aqhi\.gov\.hk$/i.test(location.origin);
+      const proxyKey = /24pc/i.test(enUrl) ? '24pc' : '24aqhi';
+
+      // 1) Same-origin proxy → 真正即時 EPD XML（氣體／PM／AQHI 24h）
+      if (PROXY_EPD) {
+        try {
+          const res = await fetch(`${PROXY_EPD}?f=${proxyKey}`);
+          if (!res.ok) throw new Error(`proxy HTTP ${res.status}`);
+          const xmlText = await res.text();
+          if (!xmlText.trimStart().startsWith('<')) throw new Error('proxy 非 XML');
+          return { xmlText, via: 'live-proxy', time: null };
+        } catch (err) {
+          console.warn('proxy live failed', err);
+        }
+      }
+
+      // 2) 直接打 EPD（只喺 aqhi.gov.hk Origin 先得）
+      if (canLive) {
+        try {
+          const res = await fetch(liveUrl);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return { xmlText: await res.text(), via: 'live', time: null };
+        } catch (_) {
+          try {
+            const res = await fetch(enUrl);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return { xmlText: await res.text(), via: 'live-en', time: null };
+          } catch (e2) { /* fall through */ }
+        }
+      }
+
+      // 3) data.gov.hk archive（滯後約 1–2 日）
+      return fetchArchiveXml(enUrl);
+    }
+
+    function parseAqhi24(xmlText) {
+      const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+      const map = new Map();
+      for (const item of doc.querySelectorAll('item')) {
+        const name = item.querySelector('StationName')?.textContent?.trim();
+        const dt = item.querySelector('DateTime')?.textContent?.trim();
+        const aqhi = item.querySelector('aqhi')?.textContent?.trim();
+        const type = item.querySelector('type')?.textContent?.trim();
+        if (!name || !dt) continue;
+        if (!map.has(name)) map.set(name, []);
+        map.get(name).push({ dt, aqhi, type });
+      }
+      for (const [k, arr] of map) {
+        arr.sort((a, b) => new Date(a.dt) - new Date(b.dt));
+        map.set(k, arr);
+      }
+      return map;
+    }
+
+    function parsePc24(xmlText) {
+      const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+      const map = new Map();
+      for (const item of doc.querySelectorAll('PollutantConcentration')) {
+        const name = item.querySelector('StationName')?.textContent?.trim();
+        const dt = item.querySelector('DateTime')?.textContent?.trim();
+        if (!name || !dt) continue;
+        const val = (tag) => {
+          const byTag = item.getElementsByTagName(tag)[0];
+          if (byTag) return byTag.textContent?.trim() || '-';
+          // 後備：有啲環境對帶點號嘅標籤（如 PM2.5）唔穩
+          for (const el of item.children) {
+            if (el.localName === tag || el.tagName === tag) {
+              return el.textContent?.trim() || '-';
+            }
+          }
+          return '-';
+        };
+        const row = {
+          dt,
+          NO2: val('NO2'),
+          O3: val('O3'),
+          SO2: val('SO2'),
+          CO: val('CO'),
+          PM10: val('PM10'),
+          'PM2.5': val('PM2.5'),
+        };
+        if (!map.has(name)) map.set(name, []);
+        map.get(name).push(row);
+      }
+      for (const [k, arr] of map) {
+        arr.sort((a, b) => new Date(a.dt) - new Date(b.dt));
+        map.set(k, arr);
+      }
+      return map;
+    }
+
+    function stationFeatures() {
+      return {
+        type: 'FeatureCollection',
+        features: STATIONS.map((s) => {
+          const cur = currentByStation.get(s.en);
+          const aqhi = cur?.aqhi ?? null;
+          return {
+            type: 'Feature',
+            properties: {
+              en: s.en,
+              tc: s.tc,
+              type: s.type,
+              aqhi: aqhi == null ? '' : String(aqhi),
+              health_risk: cur?.health_risk || '',
+              publish_date: cur?.publish_date || '',
+              color: aqhiColor(aqhi),
+            },
+            geometry: { type: 'Point', coordinates: [s.lng, s.lat] },
+          };
+        }),
+      };
+    }
+
+    function drawSparkline(canvas, series) {
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width = canvas.clientWidth * devicePixelRatio;
+      const h = canvas.height = canvas.clientHeight * devicePixelRatio;
+      ctx.clearRect(0, 0, w, h);
+      const vals = series.map((d) => {
+        const k = aqhiKey(d.aqhi);
+        return k === '10+' ? 11 : Number(k);
+      }).filter((n) => Number.isFinite(n));
+      if (vals.length < 2) {
+        ctx.fillStyle = '#9aacc8';
+        ctx.font = `${12 * devicePixelRatio}px sans-serif`;
+        ctx.fillText('數據不足', 12 * devicePixelRatio, h / 2);
+        return;
+      }
+      const min = Math.min(...vals, 1);
+      const max = Math.max(...vals, 5);
+      const pad = 8 * devicePixelRatio;
+      ctx.strokeStyle = '#3dd6c6';
+      ctx.lineWidth = 2 * devicePixelRatio;
+      ctx.beginPath();
+      vals.forEach((v, i) => {
+        const x = pad + (i / (vals.length - 1)) * (w - pad * 2);
+        const y = h - pad - ((v - min) / (max - min || 1)) * (h - pad * 2);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      vals.forEach((v, i) => {
+        const x = pad + (i / (vals.length - 1)) * (w - pad * 2);
+        const y = h - pad - ((v - min) / (max - min || 1)) * (h - pad * 2);
+        ctx.fillStyle = aqhiColor(v >= 11 ? '10+' : v);
+        ctx.beginPath();
+        ctx.arc(x, y, 3 * devicePixelRatio, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function fmtTime(dt) {
+      try {
+        const d = new Date(dt);
+        if (Number.isNaN(d.getTime())) return dt;
+        return d.toLocaleString('zh-HK', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      } catch {
+        return dt;
+      }
+    }
+
+    function renderDetail(en) {
+      selectedEn = en;
+      const meta = STATIONS.find((s) => s.en === en);
+      const cur = currentByStation.get(en);
+      const series = aqhi24ByStation.get(en) || [];
+      const pcs = pc24ByStation.get(en) || [];
+      const latestPc = pcs.length ? pcs[pcs.length - 1] : null;
+      const aqhi = cur?.aqhi ?? series.at(-1)?.aqhi ?? '—';
+      const risk = aqhiRiskTc(aqhi, cur?.health_risk);
+      const pub = cur?.publish_date
+        ? new Date(cur.publish_date).toLocaleString('zh-HK')
+        : (series.at(-1) ? fmtTime(series.at(-1).dt) : '—');
+
+      detailEl.innerHTML = `
+        <h2 class="station-title">${meta?.tc || en}</h2>
+        <div class="station-sub">${en} · ${meta?.type === 'roadside' ? '路邊站' : '一般站'}</div>
+        <div class="aqhi-card">
+          <div class="aqhi-num" style="background:${aqhiColor(aqhi)}">${aqhi}</div>
+          <div class="aqhi-meta">
+            <strong>AQHI · ${risk}</strong>
+            <span>發布／最新：${pub}</span>
+          </div>
+        </div>
+        <div class="section-title">過去 24 小時 AQHI</div>
+        <canvas class="chart" id="aqhiChart"></canvas>
+        <div class="section-title">最近一小時污染物濃度</div>
+        ${latestPc ? `
+          <table class="poll">
+            <thead><tr><th>項目</th><th>數值</th></tr></thead>
+            <tbody>
+              <tr><td>時間</td><td>${fmtTime(latestPc.dt)}</td></tr>
+              <tr><td>NO₂</td><td>${latestPc.NO2}</td></tr>
+              <tr><td>O₃</td><td>${latestPc.O3}</td></tr>
+              <tr><td>SO₂</td><td>${latestPc.SO2}</td></tr>
+              <tr><td>CO</td><td>${latestPc.CO}</td></tr>
+              <tr><td>PM₁₀</td><td>${latestPc.PM10}</td></tr>
+              <tr><td>PM₂.₅</td><td>${latestPc['PM2.5']}</td></tr>
+            </tbody>
+          </table>
+          <p class="placeholder" style="margin-top:8px;font-size:0.75rem">單位見環保署 data dictionary；「-」代表無讀數。</p>
+        ` : `<p class="placeholder">未有污染物數據。</p>`}
+        <div class="section-title">過去 24 小時污染物（節錄）</div>
+        ${pcs.length ? `
+          <table class="poll">
+            <thead>
+              <tr><th>時間</th><th>NO₂</th><th>O₃</th><th>SO₂</th><th>CO</th><th>PM₂.₅</th><th>PM₁₀</th></tr>
+            </thead>
+            <tbody>
+              ${pcs.slice(-12).map((r) => `
+                <tr>
+                  <td>${fmtTime(r.dt)}</td>
+                  <td>${r.NO2}</td><td>${r.O3}</td>
+                  <td>${r.SO2}</td><td>${r.CO}</td>
+                  <td>${r['PM2.5']}</td><td>${r.PM10}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        ` : `<p class="placeholder">未有 24 小時污染物序列。</p>`}
+        <div class="legend">
+          <span><i style="background:#00e400"></i>1–3 低</span>
+          <span><i style="background:#ffff00"></i>4–6 中</span>
+          <span><i style="background:#ff7e00"></i>7 高</span>
+          <span><i style="background:#ff0000"></i>8–10 甚高</span>
+          <span><i style="background:#8f3f97"></i>10+ 嚴重</span>
+        </div>
+      `;
+      const canvas = document.getElementById('aqhiChart');
+      if (canvas) drawSparkline(canvas, series);
+    }
+
+    async function loadAirData() {
+      setStatus('載入實時 AQHI…');
+      const nowRes = await fetch(AQHI_NOW);
+      if (!nowRes.ok) throw new Error(`實時 AQHI HTTP ${nowRes.status}`);
+      const now = await nowRes.json();
+      currentByStation = new Map(now.map((row) => [row.station, row]));
+
+      setStatus('載入過去 24 小時數據…');
+      let aqhiPack; let pcPack;
+      try {
+        [aqhiPack, pcPack] = await Promise.all([
+          fetchXmlPreferLive(AQHI_24_LIVE, AQHI_24_EN),
+          fetchXmlPreferLive(PC_24_LIVE, PC_24_EN),
+        ]);
+        aqhi24ByStation = parseAqhi24(aqhiPack.xmlText);
+        pc24ByStation = parsePc24(pcPack.xmlText);
+      } catch (err) {
+        console.warn(err);
+        setStatus(`實時 AQHI 已更新；24 小時數據失敗：${err.message || err}`, true);
+        return;
+      }
+
+      const viaNote = [aqhiPack, pcPack].map((p) => p.via).join(' / ');
+      const archiveTimes = [aqhiPack.time, pcPack.time].filter(Boolean).join(', ');
+      const liveAt = now[0]?.publish_date ? new Date(now[0].publish_date).toLocaleString('zh-HK') : '—';
+      if (viaNote.includes('live-proxy') || viaNote.includes('live')) {
+        setStatus(`實時 AQHI + 過去 24 小時污染物／AQHI 已更新（${liveAt}；來源：環保署 live）`);
+      } else if (viaNote.includes('archive')) {
+        setStatus(`實時 AQHI：${liveAt}。過去 24 小時用存檔（${archiveTimes || '最近可用'}，滯後約 1–2 日）。要用即時氣體／PM，若未用網上版，24 小時會用存檔（滯後）。`);
+      } else {
+        setStatus(`數據已更新（${liveAt}）`);
+      }
+    }
+
+    async function main() {
+      try {
+        setStatus('載入地政總署地圖樣式…');
+        const style = await buildHkStyle();
+        const LS_MODE = 'hkAirQuality.mapMode'; // '2d' | '25d'
+        const savedMode = localStorage.getItem(LS_MODE) === '25d' ? '25d' : '2d';
+        function mapBearingOrZero() {
+          try {
+            const b = Number(localStorage.getItem('hkAirQuality.mapBearing'));
+            return Number.isFinite(b) ? b : 0;
+          } catch { return 0; }
+        }
+
+        const map = new maplibregl.Map({
+          container: 'map',
+          style,
+          center: [114.12, 22.36],
+          zoom: 10,
+          maxZoom: 19,
+          pitch: savedMode === '25d' ? 60 : 0,
+          bearing: savedMode === '25d' ? mapBearingOrZero() : 0,
+          maxPitch: 70,
+          maxBounds: [[113.7, 22.05], [114.55, 22.65]],
+          attributionControl: false,
+          dragRotate: true,
+          pitchWithRotate: true,
+          touchPitch: true,
+          localIdeographFontFamily: '"Noto Sans TC", "PingFang HK", "Microsoft JhengHei", sans-serif',
+        });
+
+        map.addControl(new maplibregl.NavigationControl({
+          showCompass: true,
+          showZoom: true,
+          visualizePitch: true,
+        }), 'top-left');
+
+        // 開場鎖地圖；第一次撳地圖先解鎖
+        let mapUnlocked = false;
+        const lockHint = document.getElementById('map-lock-hint');
+        function lockMapInteraction() {
+          map.dragPan.disable();
+          map.scrollZoom.disable();
+          map.boxZoom.disable();
+          map.doubleClickZoom.disable();
+          map.touchZoomRotate.disable();
+          map.keyboard.disable();
+          // 仍可按導航掣；右鍵旋轉暫關
+          map.dragRotate.disable();
+          map.touchPitch.disable();
+          lockHint?.classList.add('show');
+        }
+        function unlockMapInteraction() {
+          if (mapUnlocked) return;
+          mapUnlocked = true;
+          map.dragPan.enable();
+          map.scrollZoom.enable();
+          map.boxZoom.enable();
+          map.doubleClickZoom.enable();
+          map.touchZoomRotate.enable();
+          map.touchZoomRotate.enableRotation();
+          map.keyboard.enable();
+          map.dragRotate.enable();
+          map.touchPitch.enable();
+          lockHint?.classList.remove('show');
+        }
+        lockMapInteraction();
+        map.on('click', unlockMapInteraction);
+        lockHint?.addEventListener('click', unlockMapInteraction);
+
+        // 資料面板可拖曳
+        (function enableSidebarDrag() {
+          const panel = document.getElementById('sidebar');
+          const handle = document.getElementById('sidebar-drag');
+          if (!panel || !handle) return;
+          const LS = 'hkAirQuality.sidebarPos';
+          try {
+            const saved = JSON.parse(localStorage.getItem(LS) || 'null');
+            if (saved && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
+              panel.style.left = saved.left + 'px';
+              panel.style.top = saved.top + 'px';
+              panel.style.right = 'auto';
+              panel.style.bottom = 'auto';
+            }
+          } catch (_) {}
+          let dragging = false, sx = 0, sy = 0, ol = 0, ot = 0;
+          const onDown = (e) => {
+            const ev = e.touches ? e.touches[0] : e;
+            dragging = true;
+            const rect = panel.getBoundingClientRect();
+            sx = ev.clientX; sy = ev.clientY;
+            ol = rect.left; ot = rect.top;
+            panel.style.left = ol + 'px';
+            panel.style.top = ot + 'px';
+            panel.style.right = 'auto';
+            panel.style.bottom = 'auto';
+            e.preventDefault();
+          };
+          const onMove = (e) => {
+            if (!dragging) return;
+            const ev = e.touches ? e.touches[0] : e;
+            const nx = ol + (ev.clientX - sx);
+            const ny = ot + (ev.clientY - sy);
+            const maxX = window.innerWidth - panel.offsetWidth - 4;
+            const maxY = window.innerHeight - 48;
+            panel.style.left = Math.min(Math.max(4, nx), Math.max(4, maxX)) + 'px';
+            panel.style.top = Math.min(Math.max(4, ny), Math.max(4, maxY)) + 'px';
+          };
+          const onUp = () => {
+            if (!dragging) return;
+            dragging = false;
+            try {
+              localStorage.setItem(LS, JSON.stringify({
+                left: parseFloat(panel.style.left),
+                top: parseFloat(panel.style.top),
+              }));
+            } catch (_) {}
+          };
+          handle.addEventListener('mousedown', onDown);
+          handle.addEventListener('touchstart', onDown, { passive: false });
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('touchmove', onMove, { passive: false });
+          window.addEventListener('mouseup', onUp);
+          window.addEventListener('touchend', onUp);
+        })();
+        map.addControl(new maplibregl.ScaleControl({ maxWidth: 120 }), 'bottom-left');
+        map.addControl(new maplibregl.AttributionControl({
+          compact: false,
+          customAttribution: '地圖資料 © <a href="https://api.portal.hkmapservice.gov.hk/disclaimer" target="_blank" rel="noopener">地政總署</a> · 數據來源環保署 / DATA.GOV.HK',
+        }), 'bottom-right');
+
+        // 右鍵拖曳旋轉／傾斜（桌面）；手機兩指
+        map.dragRotate.enable();
+        map.touchZoomRotate.enableRotation();
+
+        const tiltBtn = document.getElementById('tilt-toggle');
+
+        function applyBuildingVisibility() {
+          if (!map.getLayer('openfreemap-buildings-3d')) return;
+          const show = map.getPitch() > 5;
+          map.setLayoutProperty(
+            'openfreemap-buildings-3d',
+            'visibility',
+            show ? 'visible' : 'none',
+          );
+        }
+
+        function setModeUI(mode) {
+          tiltBtn.textContent = mode === '25d' ? '2D' : '2.5D';
+          tiltBtn.setAttribute('aria-pressed', mode === '25d' ? 'true' : 'false');
+        }
+
+        function targetPitchForZoom() {
+          const z = map.getZoom();
+          if (z >= 17.5) return 35;
+          if (z >= 16) return 45;
+          return 60;
+        }
+
+        function go25d() {
+          localStorage.setItem(LS_MODE, '25d');
+          setModeUI('25d');
+          map.easeTo({ pitch: targetPitchForZoom(), duration: 800 });
+        }
+
+        function go2d() {
+          localStorage.setItem(LS_MODE, '2d');
+          setModeUI('2d');
+          map.easeTo({ pitch: 0, bearing: 0, duration: 800 });
+          try { localStorage.setItem('hkAirQuality.mapBearing', '0'); } catch (_) {}
+        }
+
+        tiltBtn.addEventListener('click', () => {
+          const mode = localStorage.getItem(LS_MODE) === '25d' ? '25d' : '2d';
+          if (mode === '2d') go25d(); else go2d();
+        });
+        setModeUI(savedMode);
+
+        map.on('pitch', applyBuildingVisibility);
+        map.on('pitchend', () => {
+          applyBuildingVisibility();
+          const mode = map.getPitch() > 5 ? '25d' : '2d';
+          localStorage.setItem(LS_MODE, mode);
+          setModeUI(mode);
+        });
+        map.on('zoomend', () => {
+          if (localStorage.getItem(LS_MODE) === '25d' && map.getPitch() > 5) {
+            const want = targetPitchForZoom();
+            if (Math.abs(map.getPitch() - want) > 8) {
+              map.easeTo({ pitch: want, duration: 400 });
+            }
+          }
+        });
+        map.on('rotateend', () => {
+          try { localStorage.setItem('hkAirQuality.mapBearing', String(map.getBearing())); } catch (_) {}
+        });
+
+        await new Promise((resolve, reject) => {
+          map.once('load', resolve);
+          map.once('error', (e) => reject(e.error || e));
+        });
+
+        // 柔和光源；天空只淡淡加，唔用 fog 蓋住地面（2.5D 放大時先唔會空白）
+        try {
+          map.setLight({
+            anchor: 'viewport',
+            color: '#ffffff',
+            intensity: 0.6,
+            position: [1.15, 210, 30],
+          });
+        } catch (_) {}
+        try {
+          if (typeof map.setSky === 'function') {
+            map.setSky({
+              'sky-color': '#7fb8e6',
+              'sky-horizon-blend': 0.2,
+              'horizon-color': '#dcecf7',
+              'horizon-fog-blend': 0,
+              'fog-color': '#dce6f0',
+              'fog-ground-blend': 0,
+              'atmosphere-blend': 0,
+            });
+          }
+        } catch (_) {}
+
+        applyBuildingVisibility();
+
+        map.addSource('stations', { type: 'geojson', data: stationFeatures() });
+        map.addLayer({
+          id: 'stations-glow',
+          type: 'circle',
+          source: 'stations',
+          paint: {
+            'circle-radius': 14,
+            'circle-color': ['get', 'color'],
+            'circle-opacity': 0.25,
+          },
+        });
+        map.addLayer({
+          id: 'stations-circle',
+          type: 'circle',
+          source: 'stations',
+          paint: {
+            'circle-radius': 8,
+            'circle-color': ['get', 'color'],
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#0b1220',
+          },
+        });
+        map.addLayer({
+          id: 'stations-label',
+          type: 'symbol',
+          source: 'stations',
+          layout: {
+            'text-field': ['get', 'tc'],
+            'text-font': ['Arial Regular'],
+            'text-size': 11,
+            'text-offset': [0, 1.4],
+            'text-anchor': 'top',
+            'text-allow-overlap': true,
+          },
+          paint: {
+            'text-color': '#e8eefc',
+            'text-halo-color': '#0b1220',
+            'text-halo-width': 1.2,
+          },
+        });
+
+        map.on('mouseenter', 'stations-circle', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'stations-circle', () => { map.getCanvas().style.cursor = ''; });
+        map.on('click', 'stations-circle', (e) => {
+          const f = e.features?.[0];
+          if (!f) return;
+          renderDetail(f.properties.en);
+          new maplibregl.Popup({ offset: 12 })
+            .setLngLat(f.geometry.coordinates)
+            .setHTML(`<strong>${f.properties.tc}</strong><br/>AQHI ${f.properties.aqhi || '—'}`)
+            .addTo(map);
+        });
+
+        try {
+          await loadAirData();
+          map.getSource('stations').setData(stationFeatures());
+        } catch (err) {
+          console.error(err);
+          setStatus(`空氣數據載入失敗（地圖仍可用）：${err.message || err}`, true);
+        }
+
+        // 每 15 分鐘刷新實時
+        setInterval(async () => {
+          try {
+            await loadAirData();
+            map.getSource('stations').setData(stationFeatures());
+            if (selectedEn) renderDetail(selectedEn);
+          } catch (err) {
+            console.warn(err);
+          }
+        }, 15 * 60 * 1000);
+      } catch (err) {
+        console.error(err);
+        setStatus(`載入失敗：${err.message || err}`, true);
+      }
+    }
+
+    main();
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch((err) => console.warn('SW register failed', err));
+      });
+    }
+  </script>
+</body>
+</html>
