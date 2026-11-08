@@ -1,5 +1,5 @@
 /* HK-Air Quality service worker — cache shell; network-first for API/data */
-const CACHE = 'hk-air-quality-v2';
+const CACHE = 'hk-air-quality-v3';
 const PRECACHE = [
   './',
   './index.html',
