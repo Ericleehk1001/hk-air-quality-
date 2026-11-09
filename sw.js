@@ -1,5 +1,5 @@
 /* HK-Air Quality service worker — cache shell; network-first for API/data */
-const CACHE = 'hk-air-quality-v3';
+const CACHE = 'hk-air-quality-v4';
 const PRECACHE = [
   './',
   './index.html',
@@ -10,7 +10,15 @@ const PRECACHE = [
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(PRECACHE)).then(() => self.skipWaiting()));
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await Promise.all(PRECACHE.map(async (path) => {
+      const res = await fetch(new Request(path, { cache: 'reload' }));
+      if (!res.ok) throw new Error(`precache ${path} ${res.status}`);
+      await cache.put(path, res);
+    }));
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate', (event) => {

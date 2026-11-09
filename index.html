@@ -101,6 +101,8 @@
       color: var(--muted);
       border-bottom: 1px solid var(--border);
       min-height: 2.2em;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
     }
     #status.error { color: var(--danger); }
     #detail { padding: 12px 16px 20px; overflow: auto; flex: 1; }
@@ -465,21 +467,35 @@
       return { xmlText, time, via: 'archive' };
     }
 
+    function briefText(text, max = 140) {
+      const plain = String(text || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!plain) return '';
+      return plain.length > max ? `${plain.slice(0, max - 1)}…` : plain;
+    }
+
     async function fetchXmlPreferLive(liveUrl, enUrl) {
       const canLive = /^https?:\/\/([^/]*\.)?aqhi\.gov\.hk$/i.test(location.origin);
       const proxyKey = /24pc/i.test(enUrl) ? '24pc' : '24aqhi';
+      let proxyReason = null;
 
       // 1) Same-origin proxy → 真正即時 EPD XML（氣體／PM／AQHI 24h）
       if (PROXY_EPD) {
         try {
           const res = await fetch(`${PROXY_EPD}?f=${proxyKey}`);
-          if (!res.ok) throw new Error(`proxy HTTP ${res.status}`);
           const xmlText = await res.text();
-          if (!xmlText.trimStart().startsWith('<')) throw new Error('proxy 非 XML');
+          if (!res.ok) {
+            const why = briefText(xmlText) || `HTTP ${res.status}`;
+            throw new Error(`HTTP ${res.status}：${why}`);
+          }
+          const trimmed = xmlText.trimStart().replace(/^\uFEFF/, '');
+          if (!trimmed.startsWith('<')) throw new Error('回應唔係 XML');
           return { xmlText, via: 'live-proxy', time: null };
         } catch (err) {
-          console.warn('proxy live failed', err);
+          proxyReason = briefText(err && err.message ? err.message : err) || '連線失敗';
+          console.warn('proxy live failed', proxyReason);
         }
+      } else {
+        proxyReason = '無本機 proxy（請用 python server.py 開 http://127.0.0.1:8765）';
       }
 
       // 2) 直接打 EPD（只喺 aqhi.gov.hk Origin 先得）
@@ -497,8 +513,15 @@
         }
       }
 
-      // 3) data.gov.hk archive（滯後約 1–2 日）
-      return fetchArchiveXml(enUrl);
+      // 3) data.gov.hk archive（滯後約 1–2 日）— only after the proxy failure is recorded
+      try {
+        const archived = await fetchArchiveXml(enUrl);
+        archived.proxyReason = proxyReason;
+        return archived;
+      } catch (archiveErr) {
+        const why = briefText(archiveErr && archiveErr.message ? archiveErr.message : archiveErr);
+        throw new Error(proxyReason ? `proxy：${proxyReason}；存檔：${why}` : why);
+      }
     }
 
     function parseAqhi24(xmlText) {
@@ -813,13 +836,17 @@
         return;
       }
 
-      const viaNote = [aqhiPack, pcPack].map((p) => p.via).join(' / ');
-      const archiveTimes = [aqhiPack.time, pcPack.time].filter(Boolean).join(', ');
       const liveAt = now[0]?.publish_date ? new Date(now[0].publish_date).toLocaleString('zh-HK') : '—';
-      if (viaNote.includes('live-proxy') || viaNote.includes('live')) {
-        setStatus(`實時 AQHI + 過去 24 小時污染物／AQHI 已更新（${liveAt}；來源：環保署 live）`);
-      } else if (viaNote.includes('archive')) {
-        setStatus(`實時 AQHI：${liveAt}。過去 24 小時用存檔（${archiveTimes || '最近可用'}，滯後約 1–2 日）。要用即時氣體／PM，若未用網上版，24 小時會用存檔（滯後）。`);
+      const isLive = (via) => via === 'live-proxy' || via === 'live' || via === 'live-en';
+      if (isLive(aqhiPack.via) && isLive(pcPack.via)) {
+        const viaProxy = aqhiPack.via === 'live-proxy' || pcPack.via === 'live-proxy';
+        const source = viaProxy ? '本機 proxy／環保署即時' : '環保署即時';
+        setStatus(`實時 AQHI + 過去 24 小時污染物／AQHI 已更新（${liveAt}；來源：${source}）`);
+      } else if (aqhiPack.via === 'archive' || pcPack.via === 'archive') {
+        const archiveTimes = [aqhiPack.time, pcPack.time].filter(Boolean).join(', ');
+        const reasons = [...new Set([aqhiPack.proxyReason, pcPack.proxyReason].filter(Boolean))];
+        const why = reasons.length ? `Proxy 失敗：${reasons.join('；')}。` : '';
+        setStatus(`實時 AQHI：${liveAt}。過去 24 小時用存檔（${archiveTimes || '最近可用'}，滯後約 1–2 日）。${why}`);
       } else {
         setStatus(`數據已更新（${liveAt}）`);
       }
